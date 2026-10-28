@@ -64,6 +64,19 @@ pub fn handle_line(line: &str, state: &mut SharedState) -> String {
         })
         .to_string(),
         "set_config" => {
+            // Reject non-finite or negative values before mutating anything so a
+            // client sending `NaN`/`Infinity` (or an exponent that overflows f32)
+            // can't poison the config and force a simulation rebuild every frame.
+            if let Some(speed) = req.speed {
+                if !speed.is_finite() || speed < 0.0 {
+                    return error_response("speed must be a finite, non-negative number");
+                }
+            }
+            if let Some(size) = req.size {
+                if !size.is_finite() || size < 0.0 {
+                    return error_response("size must be a finite, non-negative number");
+                }
+            }
             if let Some(count) = req.flake_count {
                 state.config.flake_count = count;
             }
@@ -118,6 +131,12 @@ impl Drop for SocketGuard {
 /// file is removed when the listener drops.
 pub fn spawn_server(path: PathBuf, state: Arc<Mutex<SharedState>>) {
     std::thread::spawn(move || {
+        // Best-effort remove any stale socket file left behind by a previous
+        // run whose detached server thread was killed before its `SocketGuard`
+        // could drop. Without this, `bind` would fail with EADDRINUSE and the
+        // control channel would be silently lost on relaunch.
+        let _ = std::fs::remove_file(&path);
+
         let listener = match UnixListener::bind(&path) {
             Ok(listener) => listener,
             Err(e) => {
@@ -256,6 +275,39 @@ mod tests {
         s.paused = true;
         handle_line(r#"{"v":1,"cmd":"resume"}"#, &mut s);
         assert!(!s.paused);
+    }
+
+    #[test]
+    fn set_config_rejects_nonfinite_and_negative() {
+        let mut s = state();
+
+        let r: serde_json::Value = serde_json::from_str(&handle_line(
+            r#"{"v":1,"cmd":"set_config","speed":-1.0}"#,
+            &mut s,
+        ))
+        .unwrap();
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].is_string());
+        assert_eq!(s.config.speed, 60.0);
+
+        let r: serde_json::Value = serde_json::from_str(&handle_line(
+            r#"{"v":1,"cmd":"set_config","size":-2.0}"#,
+            &mut s,
+        ))
+        .unwrap();
+        assert_eq!(r["ok"], false);
+        assert_eq!(s.config.size, 3.0);
+
+        // `3.5e38` is a valid JSON number that parses to a finite f64 but
+        // overflows to `f32::INFINITY`; it must be rejected, not applied.
+        let r: serde_json::Value = serde_json::from_str(&handle_line(
+            r#"{"v":1,"cmd":"set_config","speed":3.5e38}"#,
+            &mut s,
+        ))
+        .unwrap();
+        assert_eq!(r["ok"], false);
+        assert_eq!(r["error"], "speed must be a finite, non-negative number");
+        assert_eq!(s.config.speed, 60.0);
     }
 
     #[test]
