@@ -7,7 +7,7 @@ use smithay_client_toolkit::output::{OutputHandler, OutputInfo, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::registry_handlers;
 use smithay_client_toolkit::shell::wlr_layer::{
-    Anchor, Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure, SurfaceKind,
+    Anchor, Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
 };
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::slot::SlotPool;
@@ -347,14 +347,14 @@ impl LayerShellHandler for App {
         &mut self,
         _conn: &Connection,
         qh: &QueueHandle<Self>,
-        layer: &LayerSurface,
+        _layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
-        serial: u32,
+        _serial: u32,
     ) {
-        // Acknowledge the configure request the compositor just sent.
-        if let SurfaceKind::Wlr(wlr) = layer.kind() {
-            wlr.ack_configure(serial);
-        }
+        // NOTE: sctk 0.21 already calls `ack_configure(serial)` for us in its
+        // dispatch (shell/wlr_layer/dispatch.rs), so we must NOT ack again
+        // here — doing so sends the same serial twice and the compositor
+        // rejects it with an "invalid configure serial" protocol error.
 
         // A size of zero means "client may choose"; keep the current size.
         let mut resized = false;
