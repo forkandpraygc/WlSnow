@@ -18,7 +18,7 @@ const SETTLE_INCREMENT: f32 = 2.0;
 const MOUND_WEIGHTS: [f32; 9] = [0.0, 0.146, 0.5, 0.854, 1.0, 0.854, 0.5, 0.146, 0.0];
 
 /// Drift height at which accumulated snow starts collapsing and sliding off.
-const MAX_DRIFT: f32 = 120.0;
+const MAX_DRIFT: f32 = 60.0;
 
 /// How much snow slides off a collapsing column per step (controls the speed
 /// of the collapse animation).
@@ -228,9 +228,9 @@ mod tests {
     #[test]
     fn collapse_ignores_below_threshold() {
         let mut s = sim(vec![], 3, 200);
-        s.ground = vec![0.0, 100.0, 0.0];
+        s.ground = vec![0.0, 50.0, 0.0];
         s.relax();
-        assert_eq!(s.ground, vec![0.0, 100.0, 0.0]);
+        assert_eq!(s.ground, vec![0.0, 50.0, 0.0]);
     }
 
     #[test]
