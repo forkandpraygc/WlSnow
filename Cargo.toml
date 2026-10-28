@@ -1,0 +1,18 @@
+[package]
+name = "wlsnow"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+smithay-client-toolkit = "0.21"
+memmap2 = "0.9"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+# none
