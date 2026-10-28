@@ -180,7 +180,13 @@ impl App {
         };
         if rebuild {
             let mut rng = rand::rng();
-            self.sim = Some(Simulation::new(config.flake_count, buf_w, buf_h, &config, &mut rng));
+            self.sim = Some(Simulation::new(
+                config.flake_count,
+                buf_w,
+                buf_h,
+                &config,
+                &mut rng,
+            ));
             self.sim_config = Some(config.clone());
         }
         let sim = self.sim.as_mut().expect("simulation initialized");

@@ -121,7 +121,10 @@ pub fn spawn_server(path: PathBuf, state: Arc<Mutex<SharedState>>) {
         let listener = match UnixListener::bind(&path) {
             Ok(listener) => listener,
             Err(e) => {
-                eprintln!("wlsnow: failed to bind control socket {}: {e}", path.display());
+                eprintln!(
+                    "wlsnow: failed to bind control socket {}: {e}",
+                    path.display()
+                );
                 return;
             }
         };
@@ -175,12 +178,17 @@ mod tests {
     use super::*;
 
     fn state() -> SharedState {
-        SharedState { config: Config::default(), paused: false, quit: false }
+        SharedState {
+            config: Config::default(),
+            paused: false,
+            quit: false,
+        }
     }
 
     #[test]
     fn hello_handshake() {
-        let r: serde_json::Value = serde_json::from_str(&handle_line(r#"{"v":1,"cmd":"hello"}"#, &mut state())).unwrap();
+        let r: serde_json::Value =
+            serde_json::from_str(&handle_line(r#"{"v":1,"cmd":"hello"}"#, &mut state())).unwrap();
         assert_eq!(r["v"], 1);
         assert_eq!(r["ok"], true);
         assert_eq!(r["protocol"], 1);
@@ -188,7 +196,9 @@ mod tests {
 
     #[test]
     fn get_config_returns_current() {
-        let r: serde_json::Value = serde_json::from_str(&handle_line(r#"{"v":1,"cmd":"get_config"}"#, &mut state())).unwrap();
+        let r: serde_json::Value =
+            serde_json::from_str(&handle_line(r#"{"v":1,"cmd":"get_config"}"#, &mut state()))
+                .unwrap();
         assert_eq!(r["flake_count"], 200);
         assert_eq!(r["speed"], 60.0);
         assert_eq!(r["paused"], false);
@@ -197,7 +207,11 @@ mod tests {
     #[test]
     fn set_config_updates_state() {
         let mut s = state();
-        let r: serde_json::Value = serde_json::from_str(&handle_line(r#"{"v":1,"cmd":"set_config","flake_count":150,"speed":80.0}"#, &mut s)).unwrap();
+        let r: serde_json::Value = serde_json::from_str(&handle_line(
+            r#"{"v":1,"cmd":"set_config","flake_count":150,"speed":80.0}"#,
+            &mut s,
+        ))
+        .unwrap();
         assert_eq!(r["ok"], true);
         assert_eq!(s.config.flake_count, 150);
         assert_eq!(s.config.speed, 80.0);
@@ -215,20 +229,23 @@ mod tests {
 
     #[test]
     fn wrong_version_errors() {
-        let r: serde_json::Value = serde_json::from_str(&handle_line(r#"{"v":99,"cmd":"hello"}"#, &mut state())).unwrap();
+        let r: serde_json::Value =
+            serde_json::from_str(&handle_line(r#"{"v":99,"cmd":"hello"}"#, &mut state())).unwrap();
         assert_eq!(r["ok"], false);
         assert!(r["error"].is_string());
     }
 
     #[test]
     fn malformed_line_errors_not_panics() {
-        let r: serde_json::Value = serde_json::from_str(&handle_line("not json at all", &mut state())).unwrap();
+        let r: serde_json::Value =
+            serde_json::from_str(&handle_line("not json at all", &mut state())).unwrap();
         assert_eq!(r["ok"], false);
     }
 
     #[test]
     fn unknown_command_errors() {
-        let r: serde_json::Value = serde_json::from_str(&handle_line(r#"{"v":1,"cmd":"bogus"}"#, &mut state())).unwrap();
+        let r: serde_json::Value =
+            serde_json::from_str(&handle_line(r#"{"v":1,"cmd":"bogus"}"#, &mut state())).unwrap();
         assert_eq!(r["ok"], false);
         assert!(r["error"].is_string());
     }
@@ -268,7 +285,9 @@ mod tests {
         }
         let mut stream = stream.expect("server should have bound the socket");
         stream.write_all(b"{\"v\":1,\"cmd\":\"hello\"}\n").unwrap();
-        stream.write_all(b"{\"v\":1,\"cmd\":\"set_config\",\"flake_count\":42}\n").unwrap();
+        stream
+            .write_all(b"{\"v\":1,\"cmd\":\"set_config\",\"flake_count\":42}\n")
+            .unwrap();
 
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut line = String::new();

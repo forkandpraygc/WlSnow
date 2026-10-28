@@ -66,7 +66,7 @@ mod tests {
 
     fn pixel(buf: &[u8], stride: u32, x: u32, y: u32) -> [u8; 4] {
         let off = (y * stride + x * 4) as usize;
-        [buf[off], buf[off+1], buf[off+2], buf[off+3]]
+        [buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]
     }
 
     #[test]
@@ -81,7 +81,13 @@ mod tests {
     fn single_flake_draws_white_center() {
         let (w, h, stride) = (20u32, 20u32, 80u32);
         let mut buf = vec![0u8; (stride * h) as usize];
-        let f = Flake { x: 10.0, y: 10.0, size: 4.0, speed: 0.0, drift: 0.0 };
+        let f = Flake {
+            x: 10.0,
+            y: 10.0,
+            size: 4.0,
+            speed: 0.0,
+            drift: 0.0,
+        };
         render_frame(&mut buf, w, h, stride, &[f]);
         assert_eq!(pixel(&buf, stride, 10, 10), [255, 255, 255, 255]);
         assert_eq!(pixel(&buf, stride, 15, 10), [0, 0, 0, 0]); // distance 5 > radius 2
@@ -91,7 +97,13 @@ mod tests {
     fn offscreen_flake_is_clipped() {
         let (w, h, stride) = (8u32, 8u32, 32u32);
         let mut buf = vec![0u8; (stride * h) as usize];
-        let f = Flake { x: -100.0, y: 2.0, size: 50.0, speed: 0.0, drift: 0.0 };
+        let f = Flake {
+            x: -100.0,
+            y: 2.0,
+            size: 50.0,
+            speed: 0.0,
+            drift: 0.0,
+        };
         render_frame(&mut buf, w, h, stride, &[f]); // must not panic or write OOB
         assert!(buf.iter().all(|&b| b == 0)); // fully offscreen -> nothing drawn
     }
@@ -100,7 +112,13 @@ mod tests {
     fn honors_stride_larger_than_width() {
         let (w, h, stride) = (2u32, 2u32, 16u32); // stride = 4px worth, width = 2px
         let mut buf = vec![0u8; (stride * h) as usize];
-        let f = Flake { x: 0.0, y: 0.0, size: 2.0, speed: 0.0, drift: 0.0 };
+        let f = Flake {
+            x: 0.0,
+            y: 0.0,
+            size: 2.0,
+            speed: 0.0,
+            drift: 0.0,
+        };
         render_frame(&mut buf, w, h, stride, &[f]);
         assert_eq!(pixel(&buf, stride, 0, 0), [255, 255, 255, 255]);
         assert_eq!(pixel(&buf, stride, 1, 1), [0, 0, 0, 0]); // outside drawn circle

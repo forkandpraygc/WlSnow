@@ -59,13 +59,23 @@ mod tests {
 
     #[test]
     fn empty_cli_uses_defaults() {
-        let cli = Cli { count: None, speed: None, size: None, drift: None };
+        let cli = Cli {
+            count: None,
+            speed: None,
+            size: None,
+            drift: None,
+        };
         assert_eq!(Config::from_cli(&cli), Config::default());
     }
 
     #[test]
     fn cli_overrides_defaults() {
-        let cli = Cli { count: Some(50), speed: Some(120.0), size: Some(5.0), drift: None };
+        let cli = Cli {
+            count: Some(50),
+            speed: Some(120.0),
+            size: Some(5.0),
+            drift: None,
+        };
         let c = Config::from_cli(&cli);
         assert_eq!(c.flake_count, 50);
         assert_eq!(c.speed, 120.0);

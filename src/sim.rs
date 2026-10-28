@@ -17,7 +17,13 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    pub fn new(count: usize, width: u32, height: u32, config: &Config, rng: &mut impl rand::Rng) -> Self {
+    pub fn new(
+        count: usize,
+        width: u32,
+        height: u32,
+        config: &Config,
+        rng: &mut impl rand::Rng,
+    ) -> Self {
         let mut flakes = Vec::with_capacity(count);
         for _ in 0..count {
             flakes.push(Flake {
@@ -28,7 +34,11 @@ impl Simulation {
                 drift: rng.random_range(-config.drift..=config.drift),
             });
         }
-        Simulation { flakes, width, height }
+        Simulation {
+            flakes,
+            width,
+            height,
+        }
     }
 
     pub fn step(&mut self, dt: f32) {
@@ -43,7 +53,7 @@ impl Simulation {
             }
             if f.y - f.size > self.height as f32 {
                 f.y = -f.size;
-                f.x = (f.x * 1.618_034 + f.speed) % self.width as f32;
+                f.x = (f.x * 1.319_573 + f.speed) % self.width as f32;
             }
         }
     }
@@ -55,7 +65,13 @@ mod tests {
     use rand::SeedableRng;
 
     fn flake() -> Flake {
-        Flake { x: 50.0, y: 50.0, size: 4.0, speed: 100.0, drift: 5.0 }
+        Flake {
+            x: 50.0,
+            y: 50.0,
+            size: 4.0,
+            speed: 100.0,
+            drift: 5.0,
+        }
     }
 
     #[test]
@@ -72,15 +88,26 @@ mod tests {
 
     #[test]
     fn step_moves_down_and_sideways() {
-        let mut sim = Simulation { flakes: vec![flake()], width: 100, height: 200 };
+        let mut sim = Simulation {
+            flakes: vec![flake()],
+            width: 100,
+            height: 200,
+        };
         sim.step(1.0);
         assert_eq!(sim.flakes[0].y, 150.0); // 50 + 100*1
-        assert_eq!(sim.flakes[0].x, 55.0);  // 50 + 5*1
+        assert_eq!(sim.flakes[0].x, 55.0); // 50 + 5*1
     }
 
     #[test]
     fn step_respawns_below_bottom() {
-        let mut sim = Simulation { flakes: vec![Flake { y: 205.0, ..flake() }], width: 100, height: 200 };
+        let mut sim = Simulation {
+            flakes: vec![Flake {
+                y: 205.0,
+                ..flake()
+            }],
+            width: 100,
+            height: 200,
+        };
         sim.step(0.0);
         assert_eq!(sim.flakes[0].y, -4.0); // -size
     }
@@ -88,7 +115,15 @@ mod tests {
     #[test]
     fn step_wraps_horizontally() {
         // drift 10.0 pushes x to 109.0, past width + size (100 + 4), so it wraps to -size.
-        let mut sim = Simulation { flakes: vec![Flake { x: 99.0, drift: 10.0, ..flake() }], width: 100, height: 200 };
+        let mut sim = Simulation {
+            flakes: vec![Flake {
+                x: 99.0,
+                drift: 10.0,
+                ..flake()
+            }],
+            width: 100,
+            height: 200,
+        };
         sim.step(1.0);
         assert_eq!(sim.flakes[0].x, -4.0);
     }
