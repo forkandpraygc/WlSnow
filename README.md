@@ -101,11 +101,3 @@ On any error (malformed JSON, unknown command, wrong protocol version) the
 server responds with `{"v":1,"ok":false,"error":"<reason>"}` and continues
 serving.
 
-## Plugin boundary
-
-The control socket is the intended plugin mechanism. It is deliberately
-language-agnostic (newline-delimited JSON over a Unix socket) and isolated:
-clients run out of process, so a misbehaving plugin cannot crash the renderer.
-Future desktop-environment plugins — e.g. KDE-specific add-ons — are expected
-to be standalone programs that connect to this socket and drive `wlsnow` through
-the protocol above, without any in-process linkage.
