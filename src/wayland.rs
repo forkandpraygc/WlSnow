@@ -7,7 +7,7 @@ use smithay_client_toolkit::output::{OutputHandler, OutputInfo, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::registry_handlers;
 use smithay_client_toolkit::shell::wlr_layer::{
-    Anchor, Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
+    Anchor, Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure, SurfaceKind,
 };
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::slot::SlotPool;
@@ -57,6 +57,7 @@ pub fn run(state: Arc<Mutex<SharedState>>) -> Result<(), Box<dyn std::error::Err
         sim_config: None,
         last_frame: Instant::now(),
         running: true,
+        error: None,
     };
 
     // Populate the output info (logical size + scale factor) before sizing the
@@ -67,6 +68,10 @@ pub fn run(state: Arc<Mutex<SharedState>>) -> Result<(), Box<dyn std::error::Err
 
     while app.running {
         event_queue.blocking_dispatch(&mut app)?;
+    }
+
+    if let Some(err) = app.error {
+        return Err(err);
     }
 
     Ok(())
@@ -94,6 +99,9 @@ struct App {
     sim_config: Option<Config>,
     last_frame: Instant,
     running: bool,
+    /// Set when a render-time failure (buffer allocation/attach) ends the loop;
+    /// returned by `run()` so the process exits non-zero.
+    error: Option<Box<dyn std::error::Error>>,
 }
 
 impl App {
@@ -214,6 +222,7 @@ impl App {
             Err(e) => {
                 eprintln!("wlsnow: failed to allocate buffer: {e}");
                 self.running = false;
+                self.error = Some(Box::new(e));
                 return;
             }
         };
@@ -227,6 +236,7 @@ impl App {
         if let Err(e) = buffer.attach_to(surface) {
             eprintln!("wlsnow: failed to attach buffer: {e}");
             self.running = false;
+            self.error = Some(Box::new(e));
             return;
         }
         layer.commit();
@@ -337,26 +347,39 @@ impl LayerShellHandler for App {
         &mut self,
         _conn: &Connection,
         qh: &QueueHandle<Self>,
-        _layer: &LayerSurface,
+        layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
-        _serial: u32,
+        serial: u32,
     ) {
-        // A size of zero means "client may choose"; keep the current size.
-        if configure.new_size.0 > 0 {
-            self.width = configure.new_size.0;
+        // Acknowledge the configure request the compositor just sent.
+        if let SurfaceKind::Wlr(wlr) = layer.kind() {
+            wlr.ack_configure(serial);
         }
-        if configure.new_size.1 > 0 {
+
+        // A size of zero means "client may choose"; keep the current size.
+        let mut resized = false;
+        if configure.new_size.0 > 0 && configure.new_size.0 != self.width {
+            self.width = configure.new_size.0;
+            resized = true;
+        }
+        if configure.new_size.1 > 0 && configure.new_size.1 != self.height {
             self.height = configure.new_size.1;
+            resized = true;
         }
 
         if let Some(output) = &self.output {
             if let Some(info) = self.output_state.info(output) {
-                self.scale = info.scale_factor.max(1);
+                let scale = info.scale_factor.max(1);
+                if scale != self.scale {
+                    self.scale = scale;
+                    resized = true;
+                }
             }
         }
 
-        // Draw on the first configure; later frames are driven by frame callbacks.
-        if self.sim.is_none() {
+        // Draw on the first configure and whenever a size/scale change requires
+        // a re-commit; later frames are driven by frame callbacks.
+        if self.sim.is_none() || resized {
             self.draw(qh);
         }
     }
