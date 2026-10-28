@@ -234,7 +234,14 @@ fn draw_surface(
         wl_shm::Format::Argb8888,
     )?;
 
-    render_frame(canvas, buf_w, buf_h, stride as u32, &sim.flakes);
+    render_frame(
+        canvas,
+        buf_w,
+        buf_h,
+        stride as u32,
+        &sim.flakes,
+        &sim.ground,
+    );
 
     let wl_surface = surface.layer.wl_surface();
     wl_surface.damage_buffer(0, 0, buf_w as i32, buf_h as i32);

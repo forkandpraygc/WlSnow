@@ -3,12 +3,21 @@ use crate::sim::Flake;
 /// Bytes per pixel: little-endian ARGB8888, byte order `[B, G, R, A]`.
 pub const BPP: usize = 4;
 
-/// Clear `buf` to transparent, then draw each flake as an opaque white filled
-/// circle of diameter `flake.size` centered at `(x, y)`, clipped to the buffer.
+/// Clear `buf` to transparent, then draw the accumulated snow drift at the
+/// bottom and each falling flake as an opaque white filled circle of diameter
+/// `flake.size` centered at `(x, y)`, clipped to the buffer.
 ///
 /// `buf.len() == stride * height` and `stride >= width * 4`. Pixel `(x, y)` is
-/// written at offset `(y * stride + x * BPP)`.
-pub fn render_frame(buf: &mut [u8], width: u32, height: u32, stride: u32, flakes: &[Flake]) {
+/// written at offset `(y * stride + x * BPP)`. `ground[x]` is the snow height at
+/// column `x`, measured up from the bottom.
+pub fn render_frame(
+    buf: &mut [u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+    flakes: &[Flake],
+    ground: &[f32],
+) {
     buf.fill(0);
 
     if width == 0 || height == 0 {
@@ -16,6 +25,23 @@ pub fn render_frame(buf: &mut [u8], width: u32, height: u32, stride: u32, flakes
     }
     let w = width as i64;
     let h = height as i64;
+
+    // Draw the accumulated snow drift: fill each column from its snow surface
+    // down to the bottom edge.
+    for x in 0..width {
+        let g = ground.get(x as usize).copied().unwrap_or(0.0);
+        if g <= 0.0 {
+            continue;
+        }
+        let top = (height as f32 - g).floor().max(0.0) as u32;
+        for y in top..height {
+            let off = (y as usize) * (stride as usize) + (x as usize) * BPP;
+            buf[off] = 255;
+            buf[off + 1] = 255;
+            buf[off + 2] = 255;
+            buf[off + 3] = 255;
+        }
+    }
 
     for f in flakes {
         let r = f.size / 2.0;
@@ -73,7 +99,7 @@ mod tests {
     fn empty_clears_to_transparent() {
         let (w, h, stride) = (4u32, 4u32, 16u32);
         let mut buf = vec![255u8; (stride * h) as usize];
-        render_frame(&mut buf, w, h, stride, &[]);
+        render_frame(&mut buf, w, h, stride, &[], &[]);
         assert!(buf.iter().all(|&b| b == 0));
     }
 
@@ -88,7 +114,7 @@ mod tests {
             speed: 0.0,
             drift: 0.0,
         };
-        render_frame(&mut buf, w, h, stride, &[f]);
+        render_frame(&mut buf, w, h, stride, &[f], &[]);
         assert_eq!(pixel(&buf, stride, 10, 10), [255, 255, 255, 255]);
         assert_eq!(pixel(&buf, stride, 15, 10), [0, 0, 0, 0]); // distance 5 > radius 2
     }
@@ -104,7 +130,7 @@ mod tests {
             speed: 0.0,
             drift: 0.0,
         };
-        render_frame(&mut buf, w, h, stride, &[f]); // must not panic or write OOB
+        render_frame(&mut buf, w, h, stride, &[f], &[]); // must not panic or write OOB
         assert!(buf.iter().all(|&b| b == 0)); // fully offscreen -> nothing drawn
     }
 
@@ -119,8 +145,29 @@ mod tests {
             speed: 0.0,
             drift: 0.0,
         };
-        render_frame(&mut buf, w, h, stride, &[f]);
+        render_frame(&mut buf, w, h, stride, &[f], &[]);
         assert_eq!(pixel(&buf, stride, 0, 0), [255, 255, 255, 255]);
         assert_eq!(pixel(&buf, stride, 1, 1), [0, 0, 0, 0]); // outside drawn circle
+    }
+
+    #[test]
+    fn ground_is_drawn_at_bottom() {
+        let (w, h, stride) = (2u32, 12u32, 8u32);
+        let mut buf = vec![0u8; (stride * h) as usize];
+        render_frame(&mut buf, w, h, stride, &[], &[10.0, 0.0]);
+        // column 0 has a 10px drift at the bottom (rows 2..=11).
+        assert_eq!(pixel(&buf, stride, 0, 11), [255, 255, 255, 255]);
+        assert_eq!(pixel(&buf, stride, 0, 2), [255, 255, 255, 255]);
+        assert_eq!(pixel(&buf, stride, 0, 1), [0, 0, 0, 0]);
+        // column 1 has no drift.
+        assert_eq!(pixel(&buf, stride, 1, 11), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn ground_clamps_above_screen() {
+        let (w, h, stride) = (1u32, 4u32, 4u32);
+        let mut buf = vec![0u8; (stride * h) as usize];
+        render_frame(&mut buf, w, h, stride, &[], &[1000.0]);
+        assert!(buf.iter().all(|&b| b == 255)); // drift overflows -> full column
     }
 }

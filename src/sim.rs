@@ -10,10 +10,15 @@ pub struct Flake {
     pub drift: f32,
 }
 
+/// Height (in pixels) added to a column each time a flake settles on it.
+const SETTLE_INCREMENT: f32 = 2.0;
+
 pub struct Simulation {
     pub flakes: Vec<Flake>,
     pub width: u32,
     pub height: u32,
+    /// Accumulated snow height per pixel column, measured up from the bottom.
+    pub ground: Vec<f32>,
 }
 
 impl Simulation {
@@ -38,6 +43,7 @@ impl Simulation {
             flakes,
             width,
             height,
+            ground: vec![0.0; width as usize],
         }
     }
 
@@ -51,7 +57,14 @@ impl Simulation {
             if f.x < -f.size {
                 f.x = self.width as f32 + f.size;
             }
-            if f.y - f.size > self.height as f32 {
+
+            // Settle on the accumulated snow (or the bottom of the screen) when
+            // the flake's bottom edge reaches the surface, then respawn it at
+            // the top.
+            let col = f.x.floor().clamp(0.0, self.width as f32 - 1.0) as usize;
+            let surface = self.height as f32 - self.ground[col];
+            if f.y + f.size * 0.5 >= surface {
+                self.ground[col] += SETTLE_INCREMENT;
                 f.y = -f.size;
                 f.x = (f.x * 1.319_573 + f.speed) % self.width as f32;
             }
@@ -74,12 +87,23 @@ mod tests {
         }
     }
 
+    fn sim(flakes: Vec<Flake>, width: u32, height: u32) -> Simulation {
+        Simulation {
+            flakes,
+            width,
+            height,
+            ground: vec![0.0; width as usize],
+        }
+    }
+
     #[test]
     fn new_places_requested_count_in_bounds() {
         let cfg = Config::default();
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let sim = Simulation::new(10, 100, 200, &cfg, &mut rng);
         assert_eq!(sim.flakes.len(), 10);
+        assert_eq!(sim.ground.len(), 100);
+        assert!(sim.ground.iter().all(|&g| g == 0.0));
         for f in &sim.flakes {
             assert!(f.x >= 0.0 && f.x <= 100.0);
             assert!(f.y >= 0.0 && f.y <= 200.0);
@@ -88,42 +112,56 @@ mod tests {
 
     #[test]
     fn step_moves_down_and_sideways() {
-        let mut sim = Simulation {
-            flakes: vec![flake()],
-            width: 100,
-            height: 200,
-        };
+        let mut sim = sim(vec![flake()], 100, 200);
         sim.step(1.0);
         assert_eq!(sim.flakes[0].y, 150.0); // 50 + 100*1
         assert_eq!(sim.flakes[0].x, 55.0); // 50 + 5*1
+        assert!(sim.ground.iter().all(|&g| g == 0.0)); // too high to settle
     }
 
     #[test]
-    fn step_respawns_below_bottom() {
-        let mut sim = Simulation {
-            flakes: vec![Flake {
+    fn step_settles_flake_on_ground() {
+        let mut s = sim(
+            vec![Flake {
                 y: 205.0,
                 ..flake()
             }],
-            width: 100,
-            height: 200,
-        };
-        sim.step(0.0);
-        assert_eq!(sim.flakes[0].y, -4.0); // -size
+            100,
+            200,
+        );
+        s.step(0.0);
+        assert_eq!(s.flakes[0].y, -4.0); // respawned at the top
+        assert_eq!(s.ground[50], 2.0); // a lump accumulated at column 50
+    }
+
+    #[test]
+    fn step_settles_on_existing_ground() {
+        let mut s = sim(
+            vec![Flake {
+                y: 188.0,
+                ..flake()
+            }],
+            100,
+            200,
+        );
+        s.ground[50] = 10.0; // surface at y = 200 - 10 = 190
+        s.step(0.0);
+        // flake bottom (188 + 2 = 190) reaches the surface, so it settles.
+        assert_eq!(s.ground[50], 12.0);
     }
 
     #[test]
     fn step_wraps_horizontally() {
         // drift 10.0 pushes x to 109.0, past width + size (100 + 4), so it wraps to -size.
-        let mut sim = Simulation {
-            flakes: vec![Flake {
+        let mut sim = sim(
+            vec![Flake {
                 x: 99.0,
                 drift: 10.0,
                 ..flake()
             }],
-            width: 100,
-            height: 200,
-        };
+            100,
+            200,
+        );
         sim.step(1.0);
         assert_eq!(sim.flakes[0].x, -4.0);
     }
