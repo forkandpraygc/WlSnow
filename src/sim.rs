@@ -17,6 +17,13 @@ const SETTLE_INCREMENT: f32 = 2.0;
 /// snow over a small neighborhood turns single-column spikes into gentle slopes.
 const MOUND_WEIGHTS: [f32; 9] = [0.0, 0.146, 0.5, 0.854, 1.0, 0.854, 0.5, 0.146, 0.0];
 
+/// Drift height at which accumulated snow starts collapsing and sliding off.
+const MAX_DRIFT: f32 = 120.0;
+
+/// How much snow slides off a collapsing column per step (controls the speed
+/// of the collapse animation).
+const COLLAPSE_FLOW: f32 = 1.5;
+
 pub struct Simulation {
     pub flakes: Vec<Flake>,
     pub width: u32,
@@ -81,6 +88,34 @@ impl Simulation {
                 f.x = (f.x * 1.319_573 + f.speed) % self.width as f32;
             }
         }
+
+        self.relax();
+    }
+
+    /// Slide excess snow downhill: any column taller than `MAX_DRIFT` sheds the
+    /// excess to its lower neighbors, a bounded amount per step so the collapse
+    /// plays out as a visible slide rather than an instant reset.
+    fn relax(&mut self) {
+        let w = self.width as usize;
+        for x in 0..w {
+            self.slide(x, x + 1);
+        }
+        for x in (0..w).rev() {
+            self.slide(x, x.wrapping_sub(1));
+        }
+    }
+
+    fn slide(&mut self, from: usize, to: usize) {
+        if to >= self.width as usize
+            || self.ground[from] <= MAX_DRIFT
+            || self.ground[to] >= self.ground[from]
+        {
+            return;
+        }
+        let excess = self.ground[from] - MAX_DRIFT;
+        let flow = excess.min(COLLAPSE_FLOW);
+        self.ground[from] -= flow;
+        self.ground[to] += flow;
     }
 }
 
@@ -177,6 +212,25 @@ mod tests {
         assert!(s.ground[49] > 0.0); // neighbor got snow (mound slope)
         assert!(s.ground[51] > 0.0); // neighbor got snow (mound slope)
         assert_eq!(s.ground[46], 0.0); // outside the mound
+    }
+
+    #[test]
+    fn collapse_spreads_excess_gradually() {
+        let mut s = sim(vec![], 3, 200);
+        s.ground = vec![0.0, 150.0, 0.0];
+        s.relax();
+        assert!(s.ground[1] < 150.0); // lost snow
+        assert!(s.ground[1] >= MAX_DRIFT); // gradual, not fully collapsed
+        assert!(s.ground[0] > 0.0); // flowed left
+        assert!(s.ground[2] > 0.0); // flowed right
+    }
+
+    #[test]
+    fn collapse_ignores_below_threshold() {
+        let mut s = sim(vec![], 3, 200);
+        s.ground = vec![0.0, 100.0, 0.0];
+        s.relax();
+        assert_eq!(s.ground, vec![0.0, 100.0, 0.0]);
     }
 
     #[test]
