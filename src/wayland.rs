@@ -16,6 +16,7 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
+use crate::config::Config;
 use crate::control::SharedState;
 use crate::render::{render_frame, BPP};
 use crate::sim::Simulation;
@@ -51,6 +52,9 @@ pub fn run(state: Arc<Mutex<SharedState>>) -> Result<(), Box<dyn std::error::Err
         height: 0,
         scale: 1,
         sim: None,
+        // Config snapshot used to build the current `Simulation`, so any
+        // flake-affecting config change triggers a rebuild.
+        sim_config: None,
         last_frame: Instant::now(),
         running: true,
     };
@@ -84,6 +88,10 @@ struct App {
     /// Integer buffer scale factor.
     scale: i32,
     sim: Option<Simulation>,
+    /// Config used to build the current `Simulation`; a change to any
+    /// flake-affecting field (`flake_count`, `speed`, `size`, `drift`) triggers
+    /// a rebuild.
+    sim_config: Option<Config>,
     last_frame: Instant,
     running: bool,
 }
@@ -162,17 +170,18 @@ impl App {
 
         let stride = buf_w as usize * BPP;
 
-        // Rebuild the simulation if the flake count or the (scaled) output size
-        // changed.
-        let rebuild = match &self.sim {
-            Some(sim) => {
-                sim.width != buf_w || sim.height != buf_h || sim.flakes.len() != config.flake_count
+        // Rebuild the simulation if any flake-affecting config field (count,
+        // speed, size, drift) changed, or if the (scaled) output size changed.
+        let rebuild = match (&self.sim, &self.sim_config) {
+            (Some(sim), Some(snapshot)) => {
+                sim.width != buf_w || sim.height != buf_h || *snapshot != config
             }
-            None => true,
+            _ => true,
         };
         if rebuild {
             let mut rng = rand::rng();
             self.sim = Some(Simulation::new(config.flake_count, buf_w, buf_h, &config, &mut rng));
+            self.sim_config = Some(config.clone());
         }
         let sim = self.sim.as_mut().expect("simulation initialized");
 
