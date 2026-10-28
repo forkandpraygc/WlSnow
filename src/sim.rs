@@ -10,8 +10,12 @@ pub struct Flake {
     pub drift: f32,
 }
 
-/// Height (in pixels) added to a column each time a flake settles on it.
+/// Height (in pixels) added to the center of a settling mound.
 const SETTLE_INCREMENT: f32 = 2.0;
+
+/// Cosine-profile mound weights; index 4 is the settle column. Spreading the
+/// snow over a small neighborhood turns single-column spikes into gentle slopes.
+const MOUND_WEIGHTS: [f32; 9] = [0.0, 0.146, 0.5, 0.854, 1.0, 0.854, 0.5, 0.146, 0.0];
 
 pub struct Simulation {
     pub flakes: Vec<Flake>,
@@ -64,7 +68,15 @@ impl Simulation {
             let col = f.x.floor().clamp(0.0, self.width as f32 - 1.0) as usize;
             let surface = self.height as f32 - self.ground[col];
             if f.y + f.size * 0.5 >= surface {
-                self.ground[col] += SETTLE_INCREMENT;
+                // Add a smooth mound (not a single-column spike) so drifts form
+                // gentle slopes.
+                let center = f.x.floor() as i64;
+                for (i, &w) in MOUND_WEIGHTS.iter().enumerate() {
+                    let c = center + i as i64 - 4;
+                    if c >= 0 && c < self.width as i64 {
+                        self.ground[c as usize] += SETTLE_INCREMENT * w;
+                    }
+                }
                 f.y = -f.size;
                 f.x = (f.x * 1.319_573 + f.speed) % self.width as f32;
             }
@@ -148,6 +160,23 @@ mod tests {
         s.step(0.0);
         // flake bottom (188 + 2 = 190) reaches the surface, so it settles.
         assert_eq!(s.ground[50], 12.0);
+    }
+
+    #[test]
+    fn settle_spreads_a_mound() {
+        let mut s = sim(
+            vec![Flake {
+                y: 205.0,
+                ..flake()
+            }],
+            100,
+            200,
+        );
+        s.step(0.0);
+        assert_eq!(s.ground[50], 2.0); // center column
+        assert!(s.ground[49] > 0.0); // neighbor got snow (mound slope)
+        assert!(s.ground[51] > 0.0); // neighbor got snow (mound slope)
+        assert_eq!(s.ground[46], 0.0); // outside the mound
     }
 
     #[test]
