@@ -14,16 +14,16 @@ use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{wl_output, wl_shm, wl_surface};
-use wayland_client::{Connection, QueueHandle};
+use wayland_client::{Connection, Proxy, QueueHandle};
 
 use crate::config::Config;
 use crate::control::SharedState;
 use crate::render::{render_frame, BPP};
 use crate::sim::Simulation;
 
-/// Connect to the compositor, set up a background layer surface, and run the
-/// frame loop until the control protocol asks us to quit (or the surface is
-/// closed).
+/// Connect to the compositor, set up a `bottom` layer surface per output (above
+/// the desktop wallpaper, below windows), and run the frame loop until the
+/// control protocol asks us to quit (or a surface is closed).
 pub fn run(state: Arc<Mutex<SharedState>>) -> Result<(), Box<dyn std::error::Error>> {
     let conn = Connection::connect_to_env()?;
     let (globals, mut event_queue) = registry_queue_init(&conn)?;
@@ -45,26 +45,21 @@ pub fn run(state: Arc<Mutex<SharedState>>) -> Result<(), Box<dyn std::error::Err
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
         shm,
-        layer: None,
-        pool: None,
-        output: None,
-        width: 0,
-        height: 0,
-        scale: 1,
-        sim: None,
-        // Config snapshot used to build the current `Simulation`, so any
-        // flake-affecting config change triggers a rebuild.
-        sim_config: None,
+        surfaces: Vec::new(),
         last_frame: Instant::now(),
         running: true,
         error: None,
     };
 
-    // Populate the output info (logical size + scale factor) before sizing the
-    // layer surface.
+    // Populate output info (logical size + scale) before sizing the surfaces.
     event_queue.roundtrip(&mut app)?;
 
     app.setup(&qh, &compositor, &layer_shell)?;
+
+    // Flush the configure events produced by the initial commits, then start
+    // the animation.
+    event_queue.roundtrip(&mut app)?;
+    app.draw_all(&qh);
 
     while app.running {
         event_queue.blocking_dispatch(&mut app)?;
@@ -77,26 +72,24 @@ pub fn run(state: Arc<Mutex<SharedState>>) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// One output's layer surface, shm pool, and snow simulation.
+struct Surface {
+    layer: LayerSurface,
+    pool: SlotPool,
+    output: wl_output::WlOutput,
+    width: u32,
+    height: u32,
+    scale: i32,
+    sim: Option<Simulation>,
+    sim_config: Option<Config>,
+}
+
 struct App {
     state: Arc<Mutex<SharedState>>,
     registry_state: RegistryState,
     output_state: OutputState,
     shm: Shm,
-
-    layer: Option<LayerSurface>,
-    pool: Option<SlotPool>,
-    output: Option<wl_output::WlOutput>,
-
-    /// Logical surface size, updated by `configure`.
-    width: u32,
-    height: u32,
-    /// Integer buffer scale factor.
-    scale: i32,
-    sim: Option<Simulation>,
-    /// Config used to build the current `Simulation`; a change to any
-    /// flake-affecting field (`flake_count`, `speed`, `size`, `drift`) triggers
-    /// a rebuild.
-    sim_config: Option<Config>,
+    surfaces: Vec<Surface>,
     last_frame: Instant,
     running: bool,
     /// Set when a render-time failure (buffer allocation/attach) ends the loop;
@@ -105,55 +98,64 @@ struct App {
 }
 
 impl App {
-    /// Pick the first output, create the background layer surface sized to it,
-    /// allocate the shm pool, and perform the initial commit.
+    /// Create one background layer surface per output, sized to the output's
+    /// logical size, and perform the initial commit on each.
     fn setup(
         &mut self,
         qh: &QueueHandle<Self>,
         compositor: &CompositorState,
         layer_shell: &LayerShell,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let output = match self.output_state.outputs().next() {
-            Some(output) => output,
-            None => {
-                eprintln!("wlsnow: no wl_output available");
-                return Err("no wl_output available".into());
-            }
-        };
+        let outputs: Vec<wl_output::WlOutput> = self.output_state.outputs().collect();
+        if outputs.is_empty() {
+            eprintln!("wlsnow: no wl_output available");
+            return Err("no wl_output available".into());
+        }
 
-        let info = self.output_state.info(&output);
-        let scale = info.as_ref().map(|i| i.scale_factor.max(1)).unwrap_or(1);
-        let (width, height) = info.as_ref().map(logical_size).unwrap_or((800, 600));
+        for output in outputs {
+            let (scale, width, height) = {
+                let info = self.output_state.info(&output);
+                let scale = info.as_ref().map(|i| i.scale_factor.max(1)).unwrap_or(1);
+                let (w, h) = info.as_ref().map(logical_size).unwrap_or((800, 600));
+                (scale, w, h)
+            };
 
-        self.width = width;
-        self.height = height;
-        self.scale = scale;
-        self.output = Some(output.clone());
+            let wl_surface = compositor.create_surface(qh);
+            let layer = layer_shell.create_layer_surface(
+                qh,
+                wl_surface,
+                Layer::Bottom,
+                Some("wlsnow"),
+                Some(&output),
+            );
+            layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+            layer.set_size(width, height);
 
-        let surface = compositor.create_surface(qh);
-        let layer = layer_shell.create_layer_surface(
-            qh,
-            surface,
-            Layer::Background,
-            Some("wlsnow"),
-            Some(&output),
-        );
-        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-        layer.set_size(width, height);
-        self.layer = Some(layer);
+            let pool = SlotPool::new((width as usize) * (height as usize) * BPP, &self.shm)?;
 
-        let pool = SlotPool::new((width as usize) * (height as usize) * BPP, &self.shm)?;
-        self.pool = Some(pool);
+            self.surfaces.push(Surface {
+                layer,
+                pool,
+                output,
+                width,
+                height,
+                scale,
+                sim: None,
+                sim_config: None,
+            });
+        }
 
-        // Initial commit (no buffer) triggers the first `configure`.
-        self.layer.as_ref().expect("layer surface created").commit();
+        // Initial commits (no buffer) trigger the first configure per surface.
+        for surface in &self.surfaces {
+            surface.layer.commit();
+        }
 
         Ok(())
     }
 
-    /// Render one frame: advance the simulation and commit a fresh buffer, then
-    /// request the next frame callback.
-    fn draw(&mut self, qh: &QueueHandle<Self>) {
+    /// Render and commit every output's surface once, then let the driver
+    /// surface's frame callback pace the next frame.
+    fn draw_all(&mut self, qh: &QueueHandle<Self>) {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
         self.last_frame = now;
@@ -168,79 +170,82 @@ impl App {
             return;
         }
 
-        let scale = self.scale.max(1) as u32;
-        let buf_w = self.width.saturating_mul(scale);
-        let buf_h = self.height.saturating_mul(scale);
-        if buf_w == 0 || buf_h == 0 {
-            // Not configured yet; nothing to draw.
-            return;
-        }
-
-        let stride = buf_w as usize * BPP;
-
-        // Rebuild the simulation if any flake-affecting config field (count,
-        // speed, size, drift) changed, or if the (scaled) output size changed.
-        let rebuild = match (&self.sim, &self.sim_config) {
-            (Some(sim), Some(snapshot)) => {
-                sim.width != buf_w || sim.height != buf_h || *snapshot != config
-            }
-            _ => true,
-        };
-        if rebuild {
-            let mut rng = rand::rng();
-            self.sim = Some(Simulation::new(
-                config.flake_count,
-                buf_w,
-                buf_h,
-                &config,
-                &mut rng,
-            ));
-            self.sim_config = Some(config.clone());
-        }
-        let sim = self.sim.as_mut().expect("simulation initialized");
-
-        if !paused {
-            sim.step(dt);
-        }
-
-        let layer = match &self.layer {
-            Some(layer) => layer,
-            None => return,
-        };
-        let pool = match &mut self.pool {
-            Some(pool) => pool,
-            None => return,
-        };
-
-        let (buffer, canvas) = match pool.create_buffer(
-            buf_w as i32,
-            buf_h as i32,
-            stride as i32,
-            wl_shm::Format::Argb8888,
-        ) {
-            Ok(buffer) => buffer,
-            Err(e) => {
-                eprintln!("wlsnow: failed to allocate buffer: {e}");
+        let count = self.surfaces.len();
+        for idx in 0..count {
+            if let Err(e) = draw_surface(&mut self.surfaces[idx], qh, dt, paused, &config, idx == 0)
+            {
+                eprintln!("wlsnow: {e}");
                 self.running = false;
-                self.error = Some(Box::new(e));
+                self.error = Some(e);
                 return;
             }
-        };
-
-        render_frame(canvas, buf_w, buf_h, stride as u32, &sim.flakes);
-
-        let surface = layer.wl_surface();
-        surface.damage_buffer(0, 0, buf_w as i32, buf_h as i32);
-        surface.set_buffer_scale(scale as i32);
-        surface.frame(qh, FrameCallbackData(surface.clone()));
-        if let Err(e) = buffer.attach_to(surface) {
-            eprintln!("wlsnow: failed to attach buffer: {e}");
-            self.running = false;
-            self.error = Some(Box::new(e));
-            return;
         }
-        layer.commit();
     }
+}
+
+/// Render and commit a single output's surface. `request_frame` is true only
+/// for the driver surface (index 0), whose frame callback paces the animation.
+fn draw_surface(
+    surface: &mut Surface,
+    qh: &QueueHandle<App>,
+    dt: f32,
+    paused: bool,
+    config: &Config,
+    request_frame: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let scale = surface.scale.max(1) as u32;
+    let buf_w = surface.width.saturating_mul(scale);
+    let buf_h = surface.height.saturating_mul(scale);
+    if buf_w == 0 || buf_h == 0 {
+        // Not configured yet; nothing to draw.
+        return Ok(());
+    }
+    let stride = buf_w as usize * BPP;
+
+    // Rebuild the simulation if any flake-affecting config field (count, speed,
+    // size, drift) changed, or if the (scaled) output size changed.
+    let rebuild = match (&surface.sim, &surface.sim_config) {
+        (Some(sim), Some(snapshot)) => {
+            sim.width != buf_w || sim.height != buf_h || *snapshot != *config
+        }
+        _ => true,
+    };
+    if rebuild {
+        let mut rng = rand::rng();
+        surface.sim = Some(Simulation::new(
+            config.flake_count,
+            buf_w,
+            buf_h,
+            config,
+            &mut rng,
+        ));
+        surface.sim_config = Some(config.clone());
+    }
+    let sim = surface.sim.as_mut().expect("simulation initialized");
+
+    if !paused {
+        sim.step(dt);
+    }
+
+    let (buffer, canvas) = surface.pool.create_buffer(
+        buf_w as i32,
+        buf_h as i32,
+        stride as i32,
+        wl_shm::Format::Argb8888,
+    )?;
+
+    render_frame(canvas, buf_w, buf_h, stride as u32, &sim.flakes);
+
+    let wl_surface = surface.layer.wl_surface();
+    wl_surface.damage_buffer(0, 0, buf_w as i32, buf_h as i32);
+    wl_surface.set_buffer_scale(scale as i32);
+    if request_frame {
+        wl_surface.frame(qh, FrameCallbackData(wl_surface.clone()));
+    }
+    buffer.attach_to(wl_surface)?;
+    surface.layer.commit();
+
+    Ok(())
 }
 
 /// Best-effort logical size of an output, falling back to the current/preferred
@@ -264,10 +269,16 @@ impl CompositorHandler for App {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         new_factor: i32,
     ) {
-        self.scale = new_factor.max(1);
+        if let Some(idx) = self
+            .surfaces
+            .iter()
+            .position(|s| s.layer.wl_surface().id() == surface.id())
+        {
+            self.surfaces[idx].scale = new_factor.max(1);
+        }
     }
 
     fn transform_changed(
@@ -286,7 +297,7 @@ impl CompositorHandler for App {
         _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
-        self.draw(qh);
+        self.draw_all(qh);
     }
 
     fn surface_enter(
@@ -347,7 +358,7 @@ impl LayerShellHandler for App {
         &mut self,
         _conn: &Connection,
         qh: &QueueHandle<Self>,
-        _layer: &LayerSurface,
+        layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
@@ -356,31 +367,40 @@ impl LayerShellHandler for App {
         // here — doing so sends the same serial twice and the compositor
         // rejects it with an "invalid configure serial" protocol error.
 
-        // A size of zero means "client may choose"; keep the current size.
-        let mut resized = false;
-        if configure.new_size.0 > 0 && configure.new_size.0 != self.width {
-            self.width = configure.new_size.0;
-            resized = true;
-        }
-        if configure.new_size.1 > 0 && configure.new_size.1 != self.height {
-            self.height = configure.new_size.1;
-            resized = true;
-        }
+        let Some(idx) = self
+            .surfaces
+            .iter()
+            .position(|s| s.layer.wl_surface().id() == layer.wl_surface().id())
+        else {
+            return;
+        };
 
-        if let Some(output) = &self.output {
-            if let Some(info) = self.output_state.info(output) {
-                let scale = info.scale_factor.max(1);
-                if scale != self.scale {
-                    self.scale = scale;
-                    resized = true;
-                }
+        let output = self.surfaces[idx].output.clone();
+        let mut resized = false;
+        {
+            let s = &mut self.surfaces[idx];
+            // A size of zero means "client may choose"; keep the current size.
+            if configure.new_size.0 > 0 && configure.new_size.0 != s.width {
+                s.width = configure.new_size.0;
+                resized = true;
+            }
+            if configure.new_size.1 > 0 && configure.new_size.1 != s.height {
+                s.height = configure.new_size.1;
+                resized = true;
+            }
+        }
+        if let Some(info) = self.output_state.info(&output) {
+            let scale = info.scale_factor.max(1);
+            if scale != self.surfaces[idx].scale {
+                self.surfaces[idx].scale = scale;
+                resized = true;
             }
         }
 
-        // Draw on the first configure and whenever a size/scale change requires
-        // a re-commit; later frames are driven by frame callbacks.
-        if self.sim.is_none() || resized {
-            self.draw(qh);
+        // Re-commit on a size/scale change after the initial kickoff.
+        let started = self.surfaces.iter().any(|s| s.sim.is_some());
+        if resized && started {
+            self.draw_all(qh);
         }
     }
 }

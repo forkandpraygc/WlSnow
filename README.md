@@ -1,9 +1,10 @@
 # WlSnow
 
 A native Wayland falling-snow renderer. It draws an animated field of falling
-snowflakes as a `wlr-layer-shell` *background* layer, so the snow sits behind
-your windows and never intercepts pointer or keyboard input. It is a from-scratch
-Wayland equivalent of the old X11 `XSnow`.
+snowflakes as a `wlr-layer-shell` *bottom* layer — above the desktop wallpaper
+and behind your windows — and never intercepts pointer or keyboard input. It
+renders on every connected output. It is a from-scratch Wayland equivalent of the
+old X11 `XSnow`.
 
 ## Requirements
 
@@ -28,8 +29,9 @@ cargo run --release -- --count 500 --speed 120.0
 ./target/release/wlsnow --size 5.0 --drift 20.0
 ```
 
-The app runs in the foreground and renders to the background layer. Stop it with
-Ctrl-C, or via the control socket's `quit` command (see below).
+The app runs in the foreground and renders to the bottom layer (behind windows,
+over the wallpaper) on all connected outputs. Stop it with Ctrl-C, or via the
+control socket's `quit` command (see below).
 
 ### CLI flags
 
